@@ -192,7 +192,7 @@ app.post("/setup", (req, res) => {
 });
 
 // Serve the routes configured above on port 8080.
-// Note that while this app uses Go's HTTP defaults for brevity, a real-world
+// Note: a real-world
 // production app exposed on the internet should use a server with properly
 // configured timeouts, certificates, etc.
 

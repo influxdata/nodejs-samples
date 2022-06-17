@@ -1,4 +1,4 @@
-// package main implements a sample node.js application built on InfluxDB.
+// main.js implements a sample node.js application built on InfluxDB.
 //
 // This application is designed to illustrate the use of the influxdb-client
 // module and the facilities of the underlying database; in some cases it omits

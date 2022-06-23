@@ -15,7 +15,7 @@ downsample their data, and query that downsampled data.
 ```mermaid
 flowchart LR
   task[[task]]
-  /setup-. create task .->task
+  /tasks-. create task .->task
   /ingest-- raw data -->task
   task-- downsampled data -->/query
 ```
@@ -25,7 +25,7 @@ with `node main.js` to start the application listening on port 8080.
 
 - Verify the application is running by navigating to `http://localhost:8080` in your browser to see a welcome message.
 
-- `POST` a request to the `/setup` endpoint to install a downsampling task for the specified user.
+- `POST` a request to the `/tasks` endpoint to install a downsampling task for the specified user.
   
   ```
   {

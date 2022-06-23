@@ -6,8 +6,9 @@
 // Be sure to include those things in any real-world production application!
 
 require("dotenv").config();
-const { InfluxDB, Point } = require("@influxdata/influxdb-client");
-
+const { InfluxDB, HttpError, Point } = require("@influxdata/influxdb-client");
+const { OrgsAPI, BucketsAPI } = require("@influxdata/influxdb-client-apis");
+const request = require("request");
 // organizationName specifies your InfluxDB organization.
 // Organizations are used by InfluxDB to group resources such as users,
 // tasks, buckets, dashboards and more.
@@ -154,41 +155,113 @@ app.post("/query", (req, res) => {
   res.sendStatus(200);
 });
 
-// setup creates a task owned by the requested user that will down sample their data and write
-// the min, max and mean of each field of each measurement to a new measurement every five minutes.
+// recreateBucket creates a new bucket. If a bucket of the same name already exists,
+// it is deleted and then created again.
+
+async function recreateBucket(name) {
+  const orgsAPI = new OrgsAPI(client);
+  const organizations = await orgsAPI.getOrgs({ organizationName });
+  if (!organizations || !organizations.orgs || !organizations.orgs.length) {
+    console.error(`No organization named "${organizationName}" found!`);
+  }
+  const orgID = organizations.orgs[0].id;
+  console.log(
+    `Using organization "${organizationName}" identified by "${orgID}"`
+  );
+
+  console.log("*** Get buckets by name ***");
+  const bucketsAPI = new BucketsAPI(client);
+  try {
+    const buckets = await bucketsAPI.getBuckets({ orgID, name });
+    if (buckets && buckets.buckets && buckets.buckets.length) {
+      console.log(`Bucket named "${name}" already exists"`);
+      const bucketID = buckets.buckets[0].id;
+      console.log(
+        `*** Delete Bucket "${name}" identified by "${bucketID}" ***`
+      );
+      await bucketsAPI.deleteBucketsID({ bucketID });
+    }
+  } catch (e) {
+    if (e instanceof HttpError && e.statusCode == 404) {
+      // OK, bucket not found
+    } else {
+      throw e;
+    }
+  }
+
+  console.log(`*** Create Bucket "${name}" ***`);
+  // creates a bucket, entity properties are specified in the "body" property
+  const bucket = await bucketsAPI.postBuckets({ body: { orgID, name } });
+  console.log(
+    JSON.stringify(
+      bucket,
+      (key, value) => (key === "links" ? undefined : value),
+      2
+    )
+  );
+}
+
+// tasks creates a task owned by the requested user that will down sample their data and find any values in the specified time range that have a
+// value of 0.0 and will copy those points into a special bucket.
 //
 // Note that "user" here refers to a user in your application, not an InfluxDB user.
-//
+
 // POST the following to test this endpoint:
 // {"user_id":"user1"}
-app.post("/setup", (req, res) => {
+app.post("/tasks", (req, res) => {
+  // ensure there is a bucket to copy the data into
+  recreateBucket("processed_data_bucket");
   const user_id = req.body.user_id;
 
-  // Format a query that will down sample each field of each measurement included
-  // in the data by calculating the mean, min and max and writing the results to
-  // a new measurement in the same bucket.
+  //  The follow flux will find any values in the specified time range that have a
+  //  value of 0.0 and will copy those points into a special bucket.
+  //  This demonstrates 2 concepts:
+  //  1. "downsampling", or the ability to easily precompute data so that you can supply low latency
+  //     queries for your UI.
+  //     For more on downsampling, see:
+  //     https://awesome.influxdata.com/docs/part-2/querying-and-data-transformations/#materialized-views-or-downsampling-tasks
+  //  2. "alerting", or the ability to send a notification based on certain values and conditions.
+  //     For example, rather than writing the data to a new bucket, you can use http.post() to call back your application
+  //     or a different service.
+  //     To see the full power of the alerting system, see:
+  //     https://awesome.influxdata.com/docs/part-3/checks-and-notifications/
 
-  const taskQuery = `data = from(bucket: "${bucketName}")
-      |> range(start: -5m)
-      |> filter(fn: (r) => r.user_id == "${user_id}")
-      |> filter(fn: (r) => r._measurement != "downsampled")
-      |> drop(columns: ["_start", "_time", "_stop"])
-  max_data = data
-      |> max()
-      |> map(fn: (r) => ({ r with _field: r._field + "_max"}))
-  min_data = data
-      |> min()
-      |> map(fn: (r) => ({ r with _field: r._field + "_min"}))
-  mean_data = data
-      |> mean()
-      |> map(fn: (r) => ({ r with _field: r._field + "_mean"}))
-  union(tables: [max_data, min_data, mean_data])
-       |> map(fn: (r) => ({ r with _time: now(), _measurement: "downsampled" }))
-      |> to(bucket: "${bucketName}")`;
+  const query = `option task = {name: "${user_id}_task", every: 1m}
+  from(bucket: "${bucketName}")
+  |> range(start: -1m)
+  |> filter(fn: (r) => r.user_id == "${user_id}")
+  |> filter(fn: (r) => r._value == 0.0)
+  |> to(bucket: "processed_data_bucket")`;
 
-  const name = `"${user_id}"_task`;
+  // Your real code should authorize the user, and ensure that the user_id matches the authorization.
+  const data = {
+    flux: query,
+    org: organizationID,
+    status: "active",
+    description: "This task downsamples",
+  };
+  const host = url + "/api/v2/tasks";
+  console.log("host: ", host);
 
-  client.TasksAPI().CreateTaskWithEvery(name, taskQuery, "5m", organizationID);
+  request.post(
+    {
+      url: host,
+      body: data,
+      headers: {
+        Authorization: `Token ${token}`,
+        "Content-Type": "application/json",
+      },
+      json: true,
+    },
+    function (error, response, body) {
+      if (error) {
+        return console.log(error);
+      }
+      res.sendStatus(200);
+      console.log(`Status: ${response.statusCode}`);
+      console.log(body);
+    }
+  );
 });
 
 // Serve the routes configured above on port 8080.

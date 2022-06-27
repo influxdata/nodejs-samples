@@ -5,6 +5,7 @@
 // important best practices such as handling errors and authenticating requests.
 // Be sure to include those things in any real-world production application!
 
+// make sure to add env variables to the .env file
 require("dotenv").config();
 const { InfluxDB, HttpError, Point } = require("@influxdata/influxdb-client");
 const { OrgsAPI, BucketsAPI } = require("@influxdata/influxdb-client-apis");
@@ -12,10 +13,9 @@ const request = require("request");
 // organizationName specifies your InfluxDB organization.
 // Organizations are used by InfluxDB to group resources such as users,
 // tasks, buckets, dashboards and more.
-const organizationName = process.env.INFLUXDB_ORGANIZATION;
 
-// organizationID is used by the task API and is populated
-// by looking up the organizationName at startup.
+// your org name, org id, and url can be found at https://cloud2.influxdata.com/me/about
+const organizationName = process.env.INFLUXDB_ORGANIZATION;
 const organizationID = process.env.ORGANIZATION_ID;
 
 // url is the URL of your InfluxDB instance or Cloud environment.
@@ -97,11 +97,11 @@ app.post("/ingest", (req, res) => {
       console.log("WRITE FINISHED");
     });
     res.sendStatus(200);
-  } catch (e) {
-    if (e.res.statusCode === 401) {
+  } catch (error) {
+    if (error.res.statusCode === 401) {
       res.send("error: insufficient permission");
     }
-    if (e.res.statusCode === 404) {
+    if (error.res.statusCode === 404) {
       res.send("Bucket name does not exist");
     }
   }
@@ -146,13 +146,13 @@ app.post("/query", (req, res) => {
       console.log(tableObject);
     },
     error: (error) => {
-      console.error("\nError", error);
+      res.status(500).send(error.message);
     },
     complete: () => {
+      res.sendStatus(200);
       console.log("\nSuccess");
     },
   });
-  res.sendStatus(200);
 });
 
 // recreateBucket creates a new bucket. If a bucket of the same name already exists,
@@ -160,10 +160,13 @@ app.post("/query", (req, res) => {
 
 async function recreateBucket(name) {
   const orgsAPI = new OrgsAPI(client);
+
   const organizations = await orgsAPI.getOrgs({ organizationName });
   if (!organizations || !organizations.orgs || !organizations.orgs.length) {
     console.error(`No organization named "${organizationName}" found!`);
+    throw new Error(`No organization named "${organizationName}" found!`);
   }
+
   const orgID = organizations.orgs[0].id;
   console.log(
     `Using organization "${organizationName}" identified by "${orgID}"`
@@ -181,11 +184,11 @@ async function recreateBucket(name) {
       );
       await bucketsAPI.deleteBucketsID({ bucketID });
     }
-  } catch (e) {
-    if (e instanceof HttpError && e.statusCode == 404) {
+  } catch (error) {
+    if (error instanceof HttpError && error.statusCode == 404) {
       // OK, bucket not found
     } else {
-      throw e;
+      throw error;
     }
   }
 
@@ -210,7 +213,12 @@ async function recreateBucket(name) {
 // {"user_id":"user1"}
 app.post("/tasks", (req, res) => {
   // ensure there is a bucket to copy the data into
-  recreateBucket("processed_data_bucket");
+
+  try {
+    await recreateBucket("processed_data_bucket");
+  } catch (error) {
+    console.log(error);
+  }
   const user_id = req.body.user_id;
 
   //  The follow flux will find any values in the specified time range that have a
@@ -241,7 +249,6 @@ app.post("/tasks", (req, res) => {
     description: "This task downsamples",
   };
   const host = url + "/api/v2/tasks";
-  console.log("host: ", host);
 
   request.post(
     {
@@ -255,7 +262,9 @@ app.post("/tasks", (req, res) => {
     },
     function (error, response, body) {
       if (error) {
-        return console.log(error);
+        console.log(error);
+        res.status(500).send(error.message);
+        return;
       }
       res.sendStatus(200);
       console.log(`Status: ${response.statusCode}`);

@@ -9,7 +9,8 @@
 require("dotenv").config();
 const { InfluxDB, HttpError, Point } = require("@influxdata/influxdb-client");
 const { OrgsAPI, BucketsAPI } = require("@influxdata/influxdb-client-apis");
-const request = require("request");
+const got = require("got");
+
 // organizationName specifies your InfluxDB organization.
 // Organizations are used by InfluxDB to group resources such as users,
 // tasks, buckets, dashboards and more.
@@ -214,11 +215,9 @@ async function recreateBucket(name) {
 app.post("/tasks", (req, res) => {
   // ensure there is a bucket to copy the data into
 
-  try {
-    await recreateBucket("processed_data_bucket");
-  } catch (error) {
+  recreateBucket("processed_data_bucket").then().catch(error => {
     console.log(error);
-  }
+  });
   const user_id = req.body.user_id;
 
   //  The follow flux will find any values in the specified time range that have a
@@ -250,27 +249,20 @@ app.post("/tasks", (req, res) => {
   };
   const host = url + "/api/v2/tasks";
 
-  request.post(
-    {
-      url: host,
-      body: data,
-      headers: {
-        Authorization: `Token ${token}`,
-        "Content-Type": "application/json",
-      },
-      json: true,
-    },
-    function (error, response, body) {
-      if (error) {
-        console.log(error);
-        res.status(500).send(error.message);
-        return;
-      }
-      res.sendStatus(200);
-      console.log(`Status: ${response.statusCode}`);
-      console.log(body);
+  got.post(host, {
+    json: data,
+    headers: {
+      Authorization: `Token ${token}`,
+      "Content-Type": "application/json"
     }
-  );
+  }).then(response => {
+    console.log(`Status: ${response.statusCode}`);
+    console.log(response.body);
+    res.status(200).send(response.body);
+  }).catch(error => {
+    console.log(error);
+    res.status(500).send(error.message);
+  });
 });
 
 // Serve the routes configured above on port 8080.
